@@ -42,7 +42,7 @@ t_span = (0, 1000)
 
 # Case 1 vertical particle at a certain thrust
 def Case1(t, state):
-    y, v, m_fuel = state
+    y, v, m_f = state
 
     # Controls mass and fuel
     if m_fuel > 0:
