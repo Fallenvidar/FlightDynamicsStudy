@@ -161,7 +161,7 @@ if solution.t_events[0].size > 0:
     print("Impact time (s):", round(solution.t_events[0][0]))
     print("Impact velocity (m/s):", round(abs(solution.y_events[0][0][1])))
 
-# identify when max velocity is achived, max height, and imapct
+# identify when max velocity is archived, max height, and impact
 if solution.t_events[2].size > 0:  # Max velocity
     t_max_v = solution.t_events[2][0]
     y_max_v = solution.y_events[2][0][0]
