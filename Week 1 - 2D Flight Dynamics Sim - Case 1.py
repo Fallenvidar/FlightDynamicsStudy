@@ -48,7 +48,7 @@ m_f0 = m_f
 state0 = [y0, v0, m_f0]
 t_span = (0, 1000)
 
-
+#------------------------------------------------------------------------------
 # Case 1 vertical particle at a certain thrust
 def Case1(t, state):
     y, v, m_f = state
@@ -69,52 +69,9 @@ def Case1(t, state):
 
     return [dydt, dvdt, dm_fuel_dt]
 
-#Non-Thrust Vectoring Case
-def case2a(t, state):
-    y,x,vy,vx,m_f = state
+#---------------------------------------------------------------------------------------
 
-    # Controls mass and fuel
-    if m_f > 0:
-        Ft = F0
-        mt = m_v + m_f
-        dm_fuel_dt = -mm
-    else:
-        Ft = 0
-        mt = m_v
-        dm_fuel_dt = 0
-
-    dydt = vy
-    dxdt = vx
-
-    dvydt = (Ft * np.sin(theta) - mt * g - ((1 / 2) * rho * np.exp(-y / H) * v * abs(v) * A * Cd) + (1/2 * rho * v * abs(v) * Aw ) / mt
-
-    dxydt =
-
-    return[dydt, dxdt ,dvydt, dxydt,dm_fuel_dt]
-
-#Thrust Vectoring Case
-def case2b(t, state):
-    y,x,vy,vx, m_fuel = state
-
-    if m_f > 0:
-        Ft = F0
-        mt = m_v + m_f
-        dm_fuel_dt = -mm
-    else:
-        Ft = 0
-        mt = m_v
-        dm_fuel_dt = 0
-
-    dydt = vy
-    dxdt = vx
-
-    dvydt = (Ft * np.sin(theta) - mt * g - ((1 / 2) * rho * np.exp(-y / H) * v * abs(v) * A * Cd) + (1/2 * rho * v * abs(v) * Aw ) ) / mt
-
-    dxydt =
-
-    return [dydt, dxdt, dvydt, dxydt, dm_fuel_dt]
-
-
+#*Events*
 # Check for when the ground is hit after fuel is totally consumed
 def hit_ground(t, state):
     y, v, m_fuel = state
@@ -154,6 +111,8 @@ def max_velocity(t, state):
 
 max_velocity.terminal = False  # don't stop integration
 max_velocity.direction = -1  # only trigger when a goes from + to 0
+#-----------------------------------------------------
+
 
 # solver
 solution = solve_ivp(
@@ -171,8 +130,8 @@ y = solution.y[0]
 v = solution.y[1]
 
 
-#Need to make this portion situational depending on the case
-
+#-----------------------------------------------------------------
+# Identifying when events occur and recording
 #give information on max velocity, height, and impact time
 if solution.t_events[2].size > 0:
     print("Max velocity time (s):", round(solution.t_events[2][0]))
@@ -202,6 +161,10 @@ if solution.t_events[0].size > 0:  # Impact
     y_impact = solution.y_events[0][0][0]
     plt.plot(t_impact, y_impact, 'ko', markersize=4, label='Impact')
 
+
+#-----------------------------------------------------------------------------------
+
+#Graphing
 plt.legend()
 plt.plot(t, y)
 plt.xlabel("Time (s)")
