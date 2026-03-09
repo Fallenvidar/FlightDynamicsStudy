@@ -2,54 +2,36 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
-
-# Variables
-
-# gravity
+# Gen Variables
 g = 9.81
-# mass vehicle(kg)
-m_v = 200
-# mass fuel (kg)
-m_f = 800
-# mass flow rate (kg/s)
-mm = 5.1
-# Exhaust velocity m/s
-ve = 2943
-# drag related
-# surface density
 rho = 1.225
-
-# Scale height
 H = 8500
 
-# Area(m)
-A = 1.0
-
-# Area(m) wing
-Aw = 0.5
-
-# Angle of Ascend
-theta = np.radians(60)
-
-# Coefficient of Drag
-Cd = 0.3
-
-# Coefficient of Lift
-CL = 0.3
+# F-16 Inspired parameters( Double check )(not after burner at military thrust)
+m_v = 8500      # kg dry mass (actual F-16 is ~8,500 kg)
+m_f = 3300      # kg fuel (internal fuel load)
+mm = 25.3       # kg/s fuel flow at military thrust
+ve = 3000       # m/s effective exhaust velocity
+A = 27.87       # m² wing reference area
+Aw = 27.87      # same reference area for lift
+CL = 0.5        # cruise lift coefficient
+Cd = 0.02       # clean configuration drag coefficient
 
 # Initial conditions
 # case 1
 y0 = 0
 x0 =0
-vy0= 0
+# helps to prevent sinking caused by gravity at start. Sacrifice since this is a particle ,and we are focusing on
+# the relationship between thrust vectoring and non-thrust vectoring
+vy0= 1.0
 vx0 = 0
 F0 = mm * ve
 m_f0 = m_f
 state0 = [y0, x0,vy0,vx0, m_f0]
 t_span = (0, 5000)
-theta_b = 0
+theta_b = np.radians(45)
 theta_v = 0
-target = 1000
+target = 5000
 max_angle = np.radians(60)
 
 #Non-Thrust Vectoring Case
@@ -68,16 +50,19 @@ def case2a(t, state):
 
     v_mag = np.sqrt(vx**2 + vy**2)
     # Theta Body change
+    #Sacrfie for min launch angle to align with the fact this is a simulation it not suppose to be accuracy just get what we need out of it
+    min_angle = np.radians(45)  # minimum launch angle
     if y < target / 2:
-        theta_b = max_angle * (y / (target / 2))
+        # merge progress into base equation
+        progress = y / (target / 2)
+        theta_b = min_angle + (max_angle - min_angle) * progress
     elif y < target:
-        #merge progress into base equation
         progress = (y - target / 2) / (target / 2)
         theta_b = max_angle * (1 - progress)
-    elif m_f > 0:
-        theta_b = 0  # cruise, still have fuel
+    elif m_f > 0: # cruise, still have fuel
+        theta_b = 0
     else:
-        theta_b = -np.radians(15)  # descent, fuel gone
+        theta_b = -np.radians(15) # descent, fuel gone
 
     theta_v = np.arctan2(vy, vx)
     #Outputs
