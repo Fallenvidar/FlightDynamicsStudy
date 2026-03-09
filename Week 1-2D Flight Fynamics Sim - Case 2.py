@@ -69,15 +69,17 @@ def case2a(t, state):
     v_mag = np.sqrt(vx**2 + vy**2)
     # Theta Body change
     if y < target / 2:
-        theta_b =max_angle * (y / (target / 2))
+        theta_b = max_angle * (y / (target / 2))
     elif y < target:
-        theta_b =max_angle * (1 - (y - target/2) / (target/2))
-    elif m_f == 0:
-        theta_b = 0
+        #merge progress into base equation
+        progress = (y - target / 2) / (target / 2)
+        theta_b = max_angle * (1 - progress)
+    elif m_f > 0:
+        theta_b = 0  # cruise, still have fuel
     else:
-        theta_b = -np.radians(15)
+        theta_b = -np.radians(15)  # descent, fuel gone
 
-    theta_v = theta
+    theta_v = np.arctan2(vy, vx)
     #Outputs
     dydt = vy
     dxdt = vx
@@ -105,7 +107,7 @@ def case2b(t, state):
     dxdt = vx
 
     dvydt = (Ft * np.sin(theta) - mt * g - ((1 / 2) * rho * np.exp(-y / H) * v * abs(v) * A * Cd) + (1/2 * rho * v * abs(v) * Aw ) ) / mt
-    dxydt =
+    dvxdt = (Ft * np.cos(theta_b) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * A * Cd) * np.cos(theta_v) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * Aw * CL) * np.sin(theta_v)) / mt
 
     return [dydt, dxdt, dvydt, dxydt, dm_fuel_dt]
 
@@ -116,7 +118,7 @@ def case2b(t, state):
 # Check for when the ground is hit after fuel is totally consumed
 def hit_ground(t, state):
     y, x, vy, vx, m_f = state
-    return y  # event occurs when y = 0
+    return y - 0.1  # event occurs when y = 0
 
 
 hit_ground.terminal = True  # stop integration
@@ -133,10 +135,10 @@ solution = solve_ivp(
 
 # Extract states
 t = solution.t
-x = solution.y[0]
-y = solution.y[1]
-vx = solution.y[2]
-vy = solution.y[3]
+y = solution.y[0]
+x = solution.y[1]
+vy = solution.y[2]
+vx = solution.y[3]
 
 
 
