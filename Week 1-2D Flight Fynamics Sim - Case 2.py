@@ -31,10 +31,10 @@ state0 = [y0, x0,vy0,vx0, m_f0]
 t_span = (0, 5000)
 theta_b = np.radians(45)
 theta_v = 0
-target = 5000
+target = 1500
 max_angle = np.radians(60)
 #identifying phase
-phase = [0]
+phase = [1]
 
 #Non-Thrust Vectoring Case
 def case2a(t, state):
@@ -64,20 +64,21 @@ def case2a(t, state):
     #Using a list instead so there are no statefulness problems
     if phase[0] == 1 and y >= target / 2:
         phase[0] = 2
+        print(f"Phase 2 entered at y={y:.1f}m, v_mag={v_mag:.1f}m/s, t={t:.1f}s")
     if phase[0] == 2 and y >= target:
         phase[0] = 3
+        print(f"Phase 3 entered at y={y:.1f}m, v_mag={v_mag:.1f}m/s, t={t:.1f}s")
     if phase[0] == 3 and m_f <= 0:
         phase[0] = 4
+        print(f"Phase 4 entered at y={y:.1f}m, v_mag={v_mag:.1f}m/s, t={t:.1f}s")
 
 
-    if y < target / 2:
-        # merge progress into base equation
-        progress = y / (target / 2)
-        theta_b = min_angle + (max_angle - min_angle) * progress
-    elif y < target:
-        progress = (y - target / 2) / (target / 2)
-        theta_b = max_angle * (1 - progress)
-    elif m_f > 0: # cruise, still have fuel
+    if phase[0] == 1:
+        theta_b = min_angle + (max_angle - min_angle) * (y / (target / 2))
+    elif phase[0] == 2:
+        theta_b = max_angle * (1 - ((y - target / 2) / (target / 2)))
+        theta_b = max(theta_b, 0)  # never let it go negative in phase 2
+    elif phase[0] == 3:
         theta_b = 0
     else:
         theta_b = -np.radians(15) # descent, fuel gone
@@ -127,13 +128,13 @@ def hit_ground(t, state):
 hit_ground.terminal = True  # stop integration
 hit_ground.direction = -1  # only trigger when y is decreasing
 
-
+phase[0] = 1
 solution = solve_ivp(
     case2a,
     t_span,
     state0,
     events=[hit_ground],
-    max_step=1
+    max_step=0.05
 )
 
 # Extract states
