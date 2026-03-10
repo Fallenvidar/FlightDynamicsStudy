@@ -33,6 +33,8 @@ theta_b = np.radians(45)
 theta_v = 0
 target = 5000
 max_angle = np.radians(60)
+#identifying phase
+phase = [0]
 
 #Non-Thrust Vectoring Case
 def case2a(t, state):
@@ -49,9 +51,25 @@ def case2a(t, state):
         dm_fuel_dt = 0
 
     v_mag = np.sqrt(vx**2 + vy**2)
-    # Theta Body change
+
+    #----------------------------------------
+    # Theta Body change and angle stuff
     #Sacrfie for min launch angle to align with the fact this is a simulation it not suppose to be accuracy just get what we need out of it
+
+    #not complicated variables
+    theta_v = np.arctan2(vy, vx)
     min_angle = np.radians(45)  # minimum launch angle
+
+    #Restoing phase idea that there will be no oscillation
+    #Using a list instead so there are no statefulness problems
+    if phase[0] == 1 and y >= target / 2:
+        phase[0] = 2
+    if phase[0] == 2 and y >= target:
+        phase[0] = 3
+    if phase[0] == 3 and m_f <= 0:
+        phase[0] = 4
+
+
     if y < target / 2:
         # merge progress into base equation
         progress = y / (target / 2)
@@ -64,7 +82,7 @@ def case2a(t, state):
     else:
         theta_b = -np.radians(15) # descent, fuel gone
 
-    theta_v = np.arctan2(vy, vx)
+    #----------------------------------------
     #Outputs
     dydt = vy
     dxdt = vx
