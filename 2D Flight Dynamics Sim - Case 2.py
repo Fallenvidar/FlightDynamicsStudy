@@ -30,7 +30,7 @@ vx0 = 120
 F0 = mm * ve
 m_f0 = m_f
 state0 = [y0, x0,vy0,vx0, m_f0]
-t_span = (0, 5000)
+t_span = (0, 1500)
 theta_b = np.radians(45)
 theta_v = 0
 target = 2500
@@ -44,7 +44,7 @@ min_angle = np.radians(45)
 
 #Non-Thrust Vectoring Case
 def case2a(t, state):
-    y,x,vy,vx,m_f = state
+    y, x, vy, vx, m_f = state
 
     # Controls mass and fuel
     if m_f > 0:
@@ -56,9 +56,10 @@ def case2a(t, state):
         mt = m_v
         dm_fuel_dt = 0
 
-    v_mag = np.sqrt(vx**2 + vy**2)
+    v_mag = np.hypot(vx, vy)
 
-    #----------------------------------------
+    #---------------------------------------- Clean up comments before finishing
+    #Phase Logic
     # Theta Body change and angle stuff(put in a list for theta b so can do a theta body vs time graph)
     #Sacrfie for min launch angle to align with the fact this is a simulation it not suppose to be accuracy just get what we need out of it
 
@@ -73,7 +74,7 @@ def case2a(t, state):
         phase[0] = 3
         phase_log.append((3, t, y, v_mag))
         print(f"Phase 3 entered at y={y:.1f}m, v_mag={v_mag:.1f}m/s, t={t:.1f}s")
-    if phase[0] == 3 and m_f <= 0:
+    if phase[0] == 3 and m_f <= mm:
         phase[0] = 4
         phase_log.append((4, t, y, v_mag))
         print(f"Phase 4 entered at y={y:.1f}m, v_mag={v_mag:.1f}m/s, t={t:.1f}s")
@@ -85,7 +86,7 @@ def case2a(t, state):
         theta_b = max_angle * (1 - ((y - target / 2) / (target / 2)))
         theta_b = max(theta_b, 0)  # never let it go negative in phase 2
     elif phase[0] == 3:
-        theta_b = 0
+        theta_b = np.radians(5) #Chandged
     else:
         theta_b = -np.radians(15) # descent, fuel gone
 
@@ -93,9 +94,12 @@ def case2a(t, state):
     #May need to remove serves as a way to make sure theta_v doesn't change crazy at low v
     if v_mag < 20.0:  # below meaningful aerodynamic speed
         theta_v = theta_b  # align with body, forces act along thrust direction
+    elif vx <= 0: #ADDED
+        theta_v = theta_b
     else:
         theta_v = np.arctan2(vy, vx)
 
+    # -------------- Removed/Replaced likley cause of the looping
     # Angle of attack is difference between body and velocity direction
     alpha = theta_b - theta_v
 
@@ -103,21 +107,59 @@ def case2a(t, state):
     # CL varies linearly with angle of attack up to stall
     # At alpha = 0 (cruise): CL = CL_min
     # At alpha = max (steep climb): CL = CL_max
-    CL_min = 0.3
-    CL_max = 1.5
-    alpha_max = np.radians(20)  # stall angle
+    # CL_min = 0.3
+    # CL_max = 1.5
+    # alpha_max = np.radians(20)  # stall angle
 
     # Linear variation, clamped at stall
-    alpha_clamped = np.clip(abs(alpha), 0, alpha_max)
-    CL_eff = CL_min + (CL_max - CL_min) * (alpha_clamped / alpha_max)
+    # alpha_clamped = np.clip(abs(alpha), 0, alpha_max)
+    # CL_eff = CL_min + (CL_max - CL_min) * (alpha_clamped / alpha_max)
+    # -----------------
 
+    #Added
+    # ----------------------------------------
+    # FIX 1 — speed dependent CL cap via structural load factor limit
+    # Replaces bare CL constant in lift calculation
+    # Caps lift to 9g structural limit, preventing unrealistic forces at high speed
+    rho_a = rho * np.exp(-y / H)
+    q = max(0.5 * rho_a * v_mag**2, 1.0)  # minimum 1 Pa dynamic pressure
+
+    L_max = 9.0 * mt * g
+    if q * Aw > 0:
+        CL_max_speed = L_max / (q * Aw)
+    else:
+        CL_max_speed = CL
+
+    # ----------------------------------------
+    # FIX 2 — angle of attack dependent CL
+    # Replaces constant CL throughout all phases
+    # CL varies continuously with alpha rather than switching by phase
+    alpha = abs(theta_b - theta_v)
+    alpha_max = np.radians(20)
+    CL_min = 0.3
+    CL_max = 1.5
+    CL_alpha = CL_min + (CL_max - CL_min) * min(alpha / alpha_max, 1.0)
+
+    # Combined CL — takes the more restrictive of aerodynamic and structural limits
+    # This is where Fix 1 and Fix 2 meet
+    CL_eff = min(CL_alpha, CL_max_speed)
 
     #----------------------------------------
+    # Combing things together before final equation lets go with this method for now on to help simplifiy
+    # Force equations — use CL_eff replacing bare CL
+    # D and L now computed as named variables for clarity
+    D = q * A * Cd
+    L = q * Aw * CL_eff
+
     #Outputs
     dydt = vy
     dxdt = vx
-    dvydt = (Ft * np.sin(theta_b)- mt * g - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * A * Cd) * np.sin(theta_v) + (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * Aw * CL_eff) * np.cos(theta_v)) / mt
-    dvxdt = (Ft * np.cos(theta_b) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * A * Cd) * np.cos(theta_v) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * Aw * CL_eff) * np.sin(theta_v)) / mt
+    dvydt = (Ft * np.sin(theta_b) - mt * g - D * np.sin(theta_v) + L * np.cos(theta_v)) / mt
+    dvxdt = (Ft * np.cos(theta_b) - D * np.cos(theta_v) - L * np.sin(theta_v)) / mt
+
+    # old
+    # dvydt = (Ft * np.sin(theta_b)- mt * g - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * A * Cd) * np.sin(theta_v) + (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * Aw * CL_eff) * np.cos(theta_v)) / mt
+    # dvxdt = (Ft * np.cos(theta_b) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * A * Cd) * np.cos(theta_v) - (1/2 * rho * np.exp(-y/H) * v_mag * abs(v_mag) * Aw * CL_eff) * np.sin(theta_v)) / mt
 
 
     return[dydt, dxdt ,dvydt, dvxdt,dm_fuel_dt]
@@ -163,7 +205,8 @@ solution = solve_ivp(
     t_span,
     state0,
     events=[hit_ground],
-    max_step=0.05
+    max_step=1.0,
+    method='LSODA'
 )
 
 # Extract states
