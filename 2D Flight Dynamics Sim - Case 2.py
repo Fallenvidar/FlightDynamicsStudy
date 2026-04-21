@@ -38,8 +38,8 @@ vy0= 10
 vx0 = 120
 F0 = mm * ve
 m_f0 = m_f
-state0 = [y0, x0,vy0,vx0, m_f0]
-t_span = (0, 1500)
+state0 = [y0, x0,vy0,vx0, m_f0, np.radians(45)]
+t_span = (0, 2500)
 theta_b = np.radians(45)
 theta_v = 0
 target = 2500
@@ -60,9 +60,9 @@ def save_and_show(filename, dpi=150):
 
 #Non-Thrust Vectoring Case
 def case2a(t, state):
-    y, x, vy, vx, m_fuel = state  # renamed to m_fuel
+    y, x, vy, vx, m_fuel, theta_b = state
 
-    # Fuel and mass
+    # ---------- Mass & Thrust ----------
     if m_fuel > 0:
         Ft = F0
         mt = m_v + m_fuel
@@ -74,9 +74,11 @@ def case2a(t, state):
 
     v_mag = np.hypot(vx, vy)
 
-    # Stateless theta_b calculation based on current phase list value
-    # Phase advances forward only via list — never goes backward
+    # ---------- Atmosphere ----------
+    rho_a = rho * np.exp(-y / H)
+    q = max(0.5 * rho_a * v_mag ** 2, 1.0)
 
+    # ---------- Phase Transitions (with logging) ----------
     if phase[0] == 1 and y >= target / 2:
         phase[0] = 2
         if 2 > (phase_log[-1][0] if phase_log else 0):
@@ -95,48 +97,67 @@ def case2a(t, state):
             phase_log.append((4, t, y, v_mag))
             print(f"Phase 4 at y={y:.1f}m, v={v_mag:.1f}m/s, t={t:.1f}s")
 
-    # Theta_b computed from phase[0] — forward only
-    if phase[0] == 1:
-        theta_b = min_angle + (max_angle - min_angle) * (y / (target / 2))
-    elif phase[0] == 2:
-        theta_b = max(max_angle * (1 - (y - target / 2) / (target / 2)), 0)
-    elif phase[0] == 3:
-        altitude_error = y - target
-        if altitude_error > 25:
-            theta_b = np.radians(-5)
-        elif altitude_error < -25:
-            theta_b = np.radians(6)
-        else:
-           theta_b = np.radians(-25)
-    else:
-        theta_b = -np.radians(15)
-
-    # Theta_v guard
-    if v_mag < 1.0 or vx <= 0:
+    # ---------- Flight Path Angle ----------
+    if v_mag < 20.0 or vx <= 0:
         theta_v = theta_b
     else:
         theta_v = np.arctan2(vy, vx)
 
-        # Theta_v guard
-        if v_mag < 20.0 or vx <= 0:
-            theta_v = theta_b
+    # ---------- Aerodynamic Coefficients (α‑dependent lift, speed‑dependent drag) ----------
+    alpha = theta_b - theta_v
+    alpha_deg = np.degrees(alpha)
+
+    Cd_base = 0.02
+    if v_mag > 150:
+        Cd_speed = Cd_base + 0.005 * (v_mag - 150) / 50
+        Cd_speed = min(Cd_speed, 0.035)
+    else:
+        Cd_speed = Cd_base
+
+    CL_alpha = 0.08
+    CL_max = 1.2
+    CL = CL_max * np.tanh(CL_alpha * alpha_deg / CL_max)
+    CL = 0.7 * 0.5 + 0.3 * CL
+    k_ind = 0.1
+    Cd = Cd_speed + k_ind * CL**2
+
+    D = q * A * Cd
+    L = q * Aw * CL
+
+    # ---------- Theta_b Target Calculation ----------
+    if phase[0] == 1:
+        theta_b_target = min_angle + (max_angle - min_angle) * (y / (target / 2))
+    elif phase[0] == 2:
+        theta_b_target = max(max_angle * (1 - (y - target / 2) / (target / 2)), 0)
+    elif phase[0] == 3:
+        # Trim calculation (same as before)
+        alt_error = y - target
+        ay_target = -0.005 * alt_error - 0.05 * vy
+        F_aero_y = L * np.cos(theta_v) - D * np.sin(theta_v)
+        Fy_needed = mt * (g + ay_target) - F_aero_y
+        if Ft > 0:
+            theta_b_target = np.arctan(Fy_needed / Ft)
+            theta_b_target = np.clip(theta_b_target, np.radians(-3), np.radians(5))
         else:
-            theta_v = np.arctan2(vy, vx)
+            theta_b_target = 0.0
+    else:   # Phase 4
+        # For phugoid demonstration: hold theta_b constant (no target change)
+        theta_b_target = theta_b
 
-        # Aerodynamics — back to original simple form
-        rho_a = rho * np.exp(-y / H)
-        q = max(0.5 * rho_a * v_mag ** 2, 1.0)
+    # ---------- Rate Limit Only (No Filter) ----------
+    if phase[0] != 4:
+        max_rate = np.radians(10)   # 10 deg/s max rate
+        dtheta_b_dt = np.clip(theta_b_target - theta_b, -max_rate, max_rate)
+    else:
+        dtheta_b_dt = 0.0          # freeze theta_b during glide
 
-        D = q * A * Cd
-        L = q * Aw * CL
+    # ---------- Equations of Motion ----------
+    dydt = vy
+    dxdt = vx
+    dvydt = (Ft * np.sin(theta_b) - mt * g - D * np.sin(theta_v) + L * np.cos(theta_v)) / mt
+    dvxdt = (Ft * np.cos(theta_b) - D * np.cos(theta_v) - L * np.sin(theta_v)) / mt
 
-        # Force equations
-        dydt = vy
-        dxdt = vx
-        dvydt = (Ft * np.sin(theta_b) - mt * g - D * np.sin(theta_v)+ L * np.cos(theta_v)) / mt
-        dvxdt = (Ft * np.cos(theta_b)- D * np.cos(theta_v) - L * np.sin(theta_v)) / mt
-
-        return [dydt, dxdt, dvydt, dvxdt, dm_fuel_dt]
+    return [dydt, dxdt, dvydt, dvxdt, dm_fuel_dt, dtheta_b_dt]
 
 #Thrust Vectoring Case
 def case2b(t, state):
@@ -166,7 +187,7 @@ def case2b(t, state):
 #*Events*
 # Check for when the ground is hit after fuel is totally consumed
 def hit_ground(t, state):
-    y, x, vy, vx, m_f = state
+    y, x, vy, vx, m_f,theta_b  = state
     return y - 0.1
     # event occurs when y = 0
 
@@ -185,7 +206,7 @@ solution = solve_ivp(
     method='RK45'
 )
 
-# Diagontics
+# Diagnostics
 print(f"Termination status: {solution.status}")
 print(f"Termination message: {solution.message}")
 print(f"Final time: {solution.t[-1]:.2f}s")
@@ -198,8 +219,10 @@ y = solution.y[0]
 x = solution.y[1]
 vy = solution.y[2]
 vx = solution.y[3]
+m_fuel_sol = solution.y[4]
+theta_b_sol = solution.y[5]  # directly from state — no reconstruction needed
 
-#solving v-mag over time
+# Solving v_mag over time
 v_mag_sol = np.hypot(vx, vy)
 
 # Extract phase transition points for markers
@@ -208,40 +231,12 @@ phase_alts  = [entry[2] for entry in phase_log]
 phase_nums  = [entry[0] for entry in phase_log]
 phase_vmags = [entry[3] for entry in phase_log]
 
-#checking theta_b and theta_v
-# Recompute theta_v from solution
+# Theta_v recomputed from solution velocity components
+# Theta_b now comes directly from state — reconstruction loop removed
 theta_v_history = np.arctan2(vy, vx)
 
-# Recompute theta_b from solution using same phase logic
-theta_b_history = np.zeros(len(t))
-phase_recon = 1  # reconstructed phase
-
-for i in range(len(t)):
-    y_i = y[i]
-    m_f_i = solution.y[4][i]
-
-    # Phase reconstruction - forward only
-    if phase_recon == 1 and y_i >= target / 2:
-        phase_recon = 2
-    if phase_recon == 2 and y_i >= target:
-        phase_recon = 3
-    if phase_recon == 3 and m_f_i <= mm:
-        phase_recon = 4
-
-    # Theta_b from phase
-    if phase_recon == 1:
-        progress = y_i / (target / 2)
-        theta_b_history[i] = min_angle + (max_angle - min_angle) * progress
-    elif phase_recon == 2:
-        progress = (y_i - target / 2) / (target / 2)
-        theta_b_history[i] = max(max_angle * (1 - progress), 0)
-    elif phase_recon == 3:
-        theta_b_history[i] = np.radians(5)
-    else:
-        theta_b_history[i] = np.radians(-15)
-
 # Convert to degrees for readability
-theta_b_deg = np.degrees(theta_b_history)
+theta_b_deg = np.degrees(theta_b_sol)
 theta_v_deg = np.degrees(theta_v_history)
 
 # Plot 1 - Altitude vs Time
@@ -249,11 +244,20 @@ plt.figure(figsize=(10, 6))
 plt.plot(t, y, label='Altitude', color='blue')
 for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
     plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
+    if pn == 2:
+        label_height = py - 400
+    elif pn == 3:
+        label_height = py + 200
+    elif pn == 4:
+        label_height = py - 600
+    else:
+        label_height = py + 200
     plt.annotate(f'Phase {pn}',
                 xy=(pt, py),
-                xytext=(pt + 20, py + 200),
+                xytext=(pt + 20, label_height),
                 fontsize=8,
-                color='red')
+                color='red',
+                arrowprops=dict(arrowstyle='->', color='red', alpha=0.5))
 plt.xlabel("Time (s)")
 plt.ylabel("Height (m)")
 plt.title("Altitude vs Time — Case 2A")
@@ -264,11 +268,6 @@ save_and_show("01_altitude_vs_time.png")
 # Plot 2 - Trajectory
 plt.figure(figsize=(10, 6))
 plt.plot(x, y, label='Trajectory', color='blue')
-plt.xlabel("Downrange Distance (m)")
-plt.ylabel("Altitude (m)")
-plt.title("Trajectory — Case 2A")
-plt.grid()
-plt.legend()
 for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
     x_phase = x[np.argmin(np.abs(t - pt))]
     plt.axvline(x=x_phase, color='red', linestyle='--', alpha=0.5)
@@ -278,19 +277,17 @@ for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
                 fontsize=8,
                 color='red',
                 arrowprops=dict(arrowstyle='->', color='red', alpha=0.5))
+plt.xlabel("Downrange Distance (m)")
+plt.ylabel("Altitude (m)")
+plt.title("Trajectory — Case 2A")
+plt.grid()
+plt.legend()
 save_and_show("02_trajectory.png")
 
 # Plot 3 - Velocity Components
 plt.figure(figsize=(10, 6))
 plt.plot(t, vx, label='vx (horizontal)', color='green')
 plt.plot(t, vy, label='vy (vertical)', color='orange')
-for pt in phase_times:
-    plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
-plt.xlabel("Time (s)")
-plt.ylabel("Velocity (m/s)")
-plt.title("Velocity Components vs Time — Case 2A")
-plt.grid()
-plt.legend()
 for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
     plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
     plt.annotate(f'Phase {pn}',
@@ -298,6 +295,11 @@ for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
                 xytext=(pt + 5, 10),
                 fontsize=8,
                 color='red')
+plt.xlabel("Time (s)")
+plt.ylabel("Velocity (m/s)")
+plt.title("Velocity Components vs Time — Case 2A")
+plt.grid()
+plt.legend()
 save_and_show("03_velocity_components.png")
 
 # Plot 4 - Total Speed
@@ -305,13 +307,6 @@ plt.figure(figsize=(10, 6))
 plt.plot(t, v_mag_sol, label='Total Speed', color='purple')
 plt.axhline(y=75, color='red', linestyle='--',
             label='Min cruise speed (~75 m/s)', alpha=0.7)
-for pt in phase_times:
-    plt.axvline(x=pt, color='gray', linestyle='--', alpha=0.5)
-plt.xlabel("Time (s)")
-plt.ylabel("Speed (m/s)")
-plt.title("Total Speed vs Time — Case 2A")
-plt.grid()
-plt.legend()
 for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
     plt.axvline(x=pt, color='gray', linestyle='--', alpha=0.5)
     plt.annotate(f'Phase {pn}',
@@ -319,20 +314,19 @@ for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
                 xytext=(pt + 5, 85),
                 fontsize=8,
                 color='gray')
+plt.xlabel("Time (s)")
+plt.ylabel("Speed (m/s)")
+plt.title("Total Speed vs Time — Case 2A")
+plt.grid()
+plt.legend()
 save_and_show("04_total_speed.png")
 
 # Plot 5 - Theta comparison
+# theta_b_deg now from integrated state — shows smooth rate-limited transitions
+# theta_v_deg recomputed from velocity components as before
 plt.figure(figsize=(10, 6))
 plt.plot(t, theta_b_deg, label='theta_b (body angle)', color='blue')
 plt.plot(t, theta_v_deg, label='theta_v (velocity angle)', color='orange')
-for pt in phase_times:
-    plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
-plt.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-plt.xlabel("Time (s)")
-plt.ylabel("Angle (degrees)")
-plt.title("Theta Body vs Theta Velocity — Case 2A")
-plt.grid()
-plt.legend()
 for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
     plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
     plt.annotate(f'Phase {pn}',
@@ -340,33 +334,76 @@ for i, (pt, py, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
                 xytext=(pt + 5, 10),
                 fontsize=8,
                 color='red')
+plt.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+plt.xlabel("Time (s)")
+plt.ylabel("Angle (degrees)")
+plt.title("Theta Body vs Theta Velocity — Case 2A")
+plt.grid()
+plt.legend()
 save_and_show("05_theta_comparison.png")
 
+# ============================================================
+# Plot 6 – Linear Momentum Components (p_x, p_y)
+# ============================================================
+# Compute mass at each time step (same as in simulation)
+mass_sol = m_v + m_fuel_sol
+
+# Momentum components (kg·m/s)
+p_x = mass_sol * vx
+p_y = mass_sol * vy
+
+plt.figure(figsize=(10, 6))
+plt.plot(t, p_x, label='$p_x$ (horizontal momentum)', color='green')
+plt.plot(t, p_y, label='$p_y$ (vertical momentum)', color='orange')
+
+# Phase transition lines and annotations
+for i, (pt, py_alt, pn) in enumerate(zip(phase_times, phase_alts, phase_nums)):
+    plt.axvline(x=pt, color='red', linestyle='--', alpha=0.5)
+    # Place annotation near the bottom of the y-axis range
+    y_min, y_max = plt.ylim()
+    plt.annotate(f'Phase {pn}',
+                 xy=(pt, y_min + 0.05*(y_max - y_min)),
+                 xytext=(pt + 5, y_min + 0.1*(y_max - y_min)),
+                 fontsize=8,
+                 color='red')
+
+plt.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+plt.xlabel("Time (s)")
+plt.ylabel("Momentum (kg·m/s)")
+plt.title("Linear Momentum Components vs Time — Case 2A")
+plt.grid()
+plt.legend()
+save_and_show("06_momentum.png")
+
+# Run summary
 summary_path = os.path.join(output_dir, "run_summary.txt")
 with open(summary_path, 'w') as f:
     f.write(f"Case 2A Simulation Run\n")
     f.write(f"Timestamp: {run_timestamp}\n")
     f.write(f"{'='*40}\n\n")
     f.write(f"Parameters:\n")
-    f.write(f"  m_v    = {m_v} kg\n")
-    f.write(f"  m_f    = {m_f} kg\n")
-    f.write(f"  mm     = {mm} kg/s\n")
-    f.write(f"  ve     = {ve} m/s\n")
-    f.write(f"  F0     = {F0:.0f} N\n")
-    f.write(f"  target = {target} m\n")
-    f.write(f"  vx0    = {vx0} m/s\n")
-    f.write(f"  vy0    = {vy0} m/s\n")
-    f.write(f"  CL     = {CL}\n")
-    f.write(f"  Cd     = {Cd}\n\n")
+    f.write(f"  m_v        = {m_v} kg\n")
+    f.write(f"  m_f        = {m_f} kg\n")
+    f.write(f"  mm         = {mm} kg/s\n")
+    f.write(f"  ve         = {ve} m/s\n")
+    f.write(f"  F0         = {F0:.0f} N\n")
+    f.write(f"  target     = {target} m\n")
+    f.write(f"  vx0        = {vx0} m/s\n")
+    f.write(f"  vy0        = {vy0} m/s\n")
+    f.write(f"  CL         = {CL}\n")
+    f.write(f"  Cd         = {Cd}\n")
+    f.write(f"  theta_b0   = {np.degrees(state0[5]):.1f} deg\n")
     f.write(f"Phase Transitions:\n")
     for entry in phase_log:
         pn, pt, py, pv = entry
         f.write(f"  Phase {pn}: t={pt:.1f}s  y={py:.1f}m  v={pv:.1f}m/s\n")
     f.write(f"\nKey Results:\n")
-    f.write(f"  Max altitude  = {max(y):.1f} m\n")
-    f.write(f"  Max speed     = {max(v_mag_sol):.1f} m/s\n")
-    f.write(f"  Max range     = {max(x):.1f} m\n")
-    f.write(f"  Flight time   = {t[-1]:.1f} s\n")
-    f.write(f"  Burn time     = {m_f/mm:.1f} s\n")
+    f.write(f"  Max altitude   = {max(y):.1f} m\n")
+    f.write(f"  Max speed      = {max(v_mag_sol):.1f} m/s\n")
+    f.write(f"  Max range      = {max(x):.1f} m\n")
+    f.write(f"  Flight time    = {t[-1]:.1f} s\n")
+    f.write(f"  Burn time      = {m_f/mm:.1f} s\n")
+    f.write(f"  Final theta_b  = {theta_b_deg[-1]:.1f} deg\n")
+    f.write(f"  Final theta_v  = {theta_v_deg[-1]:.1f} deg\n")
 
 print(f"Run summary saved to: {summary_path}")
