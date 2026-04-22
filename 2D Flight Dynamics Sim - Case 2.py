@@ -128,9 +128,32 @@ def case2a(t, state):
     if phase[0] == 1:
         theta_b_target = min_angle + (max_angle - min_angle) * (y / (target / 2))
     elif phase[0] == 2:
-        theta_b_target = max(max_angle * (1 - (y - target / 2) / (target / 2)), 0)
+        # Scheduled theta_b reduction (same as before)
+        theta_b_scheduled = max_angle * (1 - (y - target / 2) / (target / 2))
+        theta_b_scheduled = theta_b_scheduled - np.radians(2) * (y - target / 2) / (target / 2)
+
+        # Desired vertical acceleration to reduce vy to zero
+        # Gain increases as we approach target altitude
+        progress = (y - target / 2) / (target / 2)  # 0 → 1
+        K_vy = 0.2 * progress  # damping gain grows
+        ay_desired = -K_vy * vy  # oppose current vertical speed
+
+        # Required vertical force
+        F_aero_y = L * np.cos(theta_v) - D * np.sin(theta_v)
+        Fy_needed = mt * (g + ay_desired) - F_aero_y
+
+        if Ft > 0:
+            # Blend scheduled angle with trim needed for ay_desired
+            theta_b_trim = np.arctan(Fy_needed / Ft)
+            theta_b_trim = np.clip(theta_b_trim, np.radians(-10), np.radians(60))
+            # Use a mix: mostly scheduled, but with correction
+            blend = progress ** 2  # more correction near target
+            theta_b_target = (1 - blend) * theta_b_scheduled + blend * theta_b_trim
+        else:
+            theta_b_target = theta_b_scheduled
     elif phase[0] == 3:
         # Trim calculation (same as before)
+        Ft = F0 * 0.7
         alt_error = y - target
         ay_target = -0.005 * alt_error - 0.05 * vy
         F_aero_y = L * np.cos(theta_v) - D * np.sin(theta_v)
@@ -138,8 +161,10 @@ def case2a(t, state):
         if Ft > 0:
             theta_b_target = np.arctan(Fy_needed / Ft)
             theta_b_target = np.clip(theta_b_target, np.radians(-3), np.radians(5))
+            theta_b_target = np.clip(theta_b_target, np.radians(-3), np.radians(5))
         else:
-            theta_b_target = 0.0
+            Ft = F0
+            theta_b_target = -np.arctan(15)
     else:   # Phase 4
         # For phugoid demonstration: hold theta_b constant (no target change)
         theta_b_target = theta_b
